@@ -120,6 +120,7 @@ while True:
     pir1_detect_signal = pir1_detect_signal_queue.get()
     pir2_detect_signal = pir2_detect_signal_queue.get()
 
+
     # results writing into 'args[3].data' file
     file = open("/root/ex_data/plot_data_%s.data" % (exp_parameter['number']), "w")
     file.write("exp_parameter" + '\n')
