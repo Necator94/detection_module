@@ -1,123 +1,142 @@
-#!/usr/bin/env python
-
-
-# _______________________________________________________________________________________________
-# Author: Ivan Matveev
-# E-mail: ivan.matveev@student.emw.hs-anhalt.de
-# Project: "Development of the detection module for a SmartLighting system"
-# Name: "Detection module"
-# Source code available on github: https://github.com/Necator94/sensors.git.
-# _______________________________________________________________________________________________
-
-# Program is targeted for human detection module.
-# Program includes signal processing and algorithm of human detection.
-# sys.argv[0] - time duration;
-# sys.argv[1] - standard deviation criteria of human detection;
-# sys.argv[2] - mean value criteria of human detection;
-
 import threading
-import Queue
-import sys
-import time
-import Adafruit_BBIO.GPIO as GPIO                               # The library for GPIO handling
+import Adafruit_BBIO.GPIO as GPIO  # The library for GPIO handling
 import logging
+import time
+import Queue
 import numpy as np
 
-logging.basicConfig(level=logging.INFO)                         # Setting up logger
-logger = logging.getLogger("experimental_setup")
+logging.basicConfig(level=logging.INFO)  # Setting up logger
+logger = logging.getLogger("detection module")
 
-def PIRpolling(gpio_pins, out_signal, exp_parameter):           # Function for PIR sensor polling
-    starttime = time.time()                                     # Get start time
-    logger.info('PIR started')
-    t_time = 0
-    while t_time < exp_parameter['duration']:                   # Perform during defined time
-        out_signal.put(GPIO.input(gpio_pins['signal_pin']))     # Check GPIO and put to the queue
-        time.sleep(0.1)                                         # Set sleeping time
-        t_time = time.time() - starttime                        # Calculate time from program start
-    logger.info('PIR finished')
 
-def RWpolling(gpio_pins, out_data, exp_parameter):              # Function for RW sensor polling and signal processing
-    periods = []
-    temp = []
-    for i in range(2): temp.append([])
-    rw_parameters  = []
-    for i in range(2): rw_parameters.append([])
-    t_time = 0
-    slide_window = []
-    logger.info('RW started')
-    startTime = time.time()                                     # Get start time
-    while t_time < exp_parameter['duration']:                   # Perform during defined time
-        check = GPIO.input(gpio_pins['signal_pin'])             # Check GPIO
-        t_time = time.time() - startTime                        # Calculate time from program start
-        # Frequency transformation
-        temp[0].append(check)
-        temp[1].append(t_time)
-        if len(temp[0]) > 1 and temp[0][-1] > temp[0][-2]:
-            periods.append(temp[1][-2])
-            if len(periods) > 1:
-                freq = 1 / (periods[-1] - periods[-2])
-                slide_window.append(freq)
-                if len(slide_window) > 3:
-                    slide_window = []
-                if len(slide_window) == 3:
-                    rw_parameters[0] = np.std(slide_window)     # Standard deviation value calculation
-                    rw_parameters[1] = np.mean(slide_window)    # Mean value calculation
-                    out_data.put(rw_parameters)                 # Put values to the queue
-                del periods[0]
-            del temp[0][:-1]
-            del temp[1][:-1]
-        time.sleep(0.001)
-    logger.info('RW finished')
+class Sensor:
+    def __init__(self, tm_pir=0.5, tm_rw=0, dr=20):
+        self.tm_pir = tm_pir
+        self.tm_rw = tm_rw
+        self.duration = dr
+        self.event = threading.Event()
+        self.pir_gpio = {'signal_pin': 'P8_15', 'LED_pin': 'P8_13'}
+        self.rw_gpio = {'signal_pin': 'P8_12', 'LED_pin': 'P8_18'}
+        self.event.set()
+        self.pir_queue = Queue.Queue()
+        self.rw_queue = Queue.Queue()
+        self.rw_queue_res = Queue.Queue()
+        self.start_time = time.time()
+        self.event = threading.Event()
 
-def control(pir_status, rw_parameters, exp_parameter):          # Function for human detection
-    while True:
-        std, mean = rw_parameters.get()
-        if std < (exp_parameter['st_dev_cr'] + 10) and mean > (exp_parameter['mean_cr'] - 10): flag_rw = True
-        else: flag_rw = False
 
-        if pir_status.get() and flag_rw:                        # If both sensors detected movement
-            logger.info('Both sensors triggered')
-            # Action to be performed in case of human detection
-            #{...........}
-            #{...........}
-        if pir_status.get() and not flag_rw:
-            logger.info('PIR sensor triggered')
-        if flag_rw and not pir_status.get():
-            logger.info('RW sensor triggered')
+    def polling(self, queue, gpio, tm):  # Function for PIR sensor polling
+        logger.info(threading.currentThread().getName() + "has started")
+        while self.event.isSet():
+            sample = []
+            sample.append(time.time())
+            sample.append(GPIO.input(gpio['signal_pin']))
+            queue.put(sample)
+#            queue.put(str(GPIO.input(gpio['signal_pin'])) + threading.currentThread().getName())  # Check GPIO and put to the queue
+#            queue.put(str(time.time()) + threading.currentThread().getName())
+            time.sleep(tm)  # Set sleeping time
+        logger.info(threading.currentThread().getName() + "has finished")
 
-# if arguments were not received, set some by default
-if len(sys.argv) < 3:
-    exp_parameter = {'duration': 10, 'st_dev_cr': 20, 'mean_cr': 20}
-    logger.info('parameters are set by default')
-else:
-    exp_parameter = {'duration': int(sys.argv[0]),              # argv[0] -  time duration;
-                     'st_dev_cr': int(sys.argv[1]),             #- standard deviation criteria of human detection;
-                     'mean_cr': int(sys.argv[2])}               # sys.argv[2] - mean value criteria of human detection;
-    logger.info('parameters are set manually')
+    def rw_processing(self):
+        logger.info(threading.currentThread().getName() + "has started")
+        f_buffer_time = []
+        f_buffer_data = []
+        s_buffer = []
 
-# Pins configuration
-# 0 - out pin     1 - LED pin
-xBandPins = {'signal_pin': 'P8_12', 'LED_pin': 'P8_11'}         # GPIO assigned for RW sensor
-pir1Pins = {'signal_pin': 'P8_15', 'LED_pin': 'P8_13'}          # GPIO assigned for PIR-1 sensor
+        result_buffer_fr = []
+        result_buffer_time = []
 
-logger.info('Program start')
+        while self.event.isSet():
+            try:
+                check = self.rw_queue.get(timeout=0.05)
+                f_buffer_time.append(check[0])
+                f_buffer_data.append(check[1])
 
-# Required configurations for GPIO
-GPIO.setup(xBandPins['signal_pin'], GPIO.IN)
-GPIO.setup(pir1Pins['signal_pin'], GPIO.IN)
+                if len(f_buffer_data) == 300:
 
-# Create objects for resource sharing
-xBand_raw_data_queue = Queue.Queue()
-pir1_detect_signal_queue = Queue.Queue()
+                    for i in range(len(f_buffer_data) - 1):
+                        if f_buffer_data[i + 1] > f_buffer_data[i]:
+                            s_buffer.append(f_buffer_time[i + 1])
+                    if len(s_buffer) > 1:
+                        for k in range(len(s_buffer) - 1):
+                            freq = 1 / (s_buffer[k + 1] - s_buffer[k])
+                            result_buffer_fr.append(freq)
+                            result_buffer_time.append(s_buffer[k + 1])
+                        mean_vol = np.mean(result_buffer_fr)
+                        self.rw_queue_res.put(mean_vol)
+                        result_buffer_fr = []
+                    else: self.rw_queue_res.put(0)
+                    s_buffer = []
+                    f_buffer_time = []
+                    f_buffer_data = []
 
-# Define threads targets and input arguments
-xBandThread = threading.Thread(target=RWpolling, args=(xBandPins, xBand_raw_data_queue, exp_parameter))
-pir1Thread = threading.Thread(target=PIRpolling, args=(pir1Pins, pir1_detect_signal_queue, exp_parameter))
+            except Queue.Empty: logger.info(threading.currentThread().getName() + "RW queue timeout")
 
-# Start threads for RW, PIR-2 and PIR-2 sensors
-xBandThread.start()
-pir1Thread.start()
 
-# Wait for threads finishing
-xBandThread.join()
-pir1Thread.join()
+
+        logger.info(threading.currentThread().getName() + "has finished")
+
+class Module(Sensor):
+    def control(self):  # Function for human detection
+        logger.info(threading.currentThread().getName() + "has started")
+        while self.event.isSet():
+
+            try:
+                status_pir = self.pir_queue.get(timeout=1)
+                logger.info(threading.currentThread().getName() + "PIR status = " + str(status_pir))
+            except Queue.Empty: logger.info(threading.currentThread().getName() + "PIR queue timeout")
+
+            try:
+                status_rw = self.rw_queue_res.get(timeout=0.5)
+                logger.info(threading.currentThread().getName() + "RW mean_val = " + str(status_rw))
+            except Queue.Empty:
+                logger.info(threading.currentThread().getName() + "RW queue timeout")
+
+            if status_rw > 0 and status_pir > 0:
+                GPIO.output('P8_18', GPIO.HIGH)
+            else:
+                GPIO.output('P8_18', GPIO.LOW)
+
+        logger.info(threading.currentThread().getName() + "has finished")
+
+    def run(self):
+        GPIO.setup(self.rw_gpio['signal_pin'], GPIO.IN)
+        GPIO.setup(self.pir_gpio['signal_pin'], GPIO.IN)
+        GPIO.setup('P8_18', GPIO.OUT)
+
+
+        #       GPIO.setup(self.pir1Pins['signal_pin'], GPIO.IN)
+        self.event.set()
+        controlTread = threading.Thread(name=' controlTread ', target=self.control)
+#        pirThread = threading.Thread(name=' Polling PIR ', target=self.polling, args=(self.pir_queue, self.pir_gpio, self.tm_pir))
+        rwThread = threading.Thread(name=' Polling RW ', target=self.polling, args=(self.rw_queue, self.rw_gpio, self.tm_rw))
+        rw_proc = threading.Thread(name=' Rw processing ', target=self.rw_processing)
+
+        controlTread.start()
+
+        rwThread.start()
+        rw_proc.start()
+#        pirThread.start()
+
+        self.starttime = time.time()
+
+        try:
+            while (time.time() - self.starttime) < self.duration and self.event.is_set(): pass
+            self.event.clear()
+#            pirThread.join()
+            rwThread.join()
+            controlTread.join()
+            rw_proc.join()
+            logger.info("Time is over, all threads have finished")
+        except KeyboardInterrupt:
+            self.event.clear()
+#            pirThread.join()
+            rwThread.join()
+            controlTread.join()
+            rw_proc.join()
+            logger.info("Keyboard Interrupt, all threads have finished")
+
+
+if __name__ == '__main__':
+    mod = Module(dr=100)
+    mod.run()

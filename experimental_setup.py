@@ -42,6 +42,8 @@ def polling(gpio_pins, out_raw_data, exp_parameter, name):      # Function for R
     logger.info(name + ' finished')
     out_raw_data.put(raw_data)                                  # Put collected data to main program
 
+
+
 # Pins configuration
 # 0 - out pin     1 - LED pin
 xBandPins = {'signal_pin': 'P8_12', 'LED_pin': 'P8_11'}         # GPIO assigned for RW sensor
