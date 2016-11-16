@@ -1,9 +1,11 @@
-import threading
-import Adafruit_BBIO.GPIO as GPIO  # The library for GPIO handling
-import logging
-import time
 import Queue
+import logging
 import numpy as np
+import sqlite3 as lite
+import threading
+import time
+
+import Adafruit_BBIO.GPIO as GPIO  # The library for GPIO handling
 
 logging.basicConfig(level=logging.INFO)  # Setting up logger
 logger = logging.getLogger("detection module")
@@ -15,9 +17,10 @@ class Sensor:
         self.tm_rw = tm_rw
         self.duration = dr
         self.event = threading.Event()
+        self.event.set()
         self.pir_gpio = {'signal_pin': 'P8_15', 'LED_pin': 'P8_13'}
         self.rw_gpio = {'signal_pin': 'P8_12', 'LED_pin': 'P8_18'}
-        self.event.set()
+
         self.pir_queue = Queue.Queue()
         self.rw_queue = Queue.Queue()
         self.rw_queue_res = Queue.Queue()
@@ -103,8 +106,6 @@ class Module(Sensor):
         GPIO.setup(self.rw_gpio['signal_pin'], GPIO.IN)
         GPIO.setup(self.pir_gpio['signal_pin'], GPIO.IN)
         GPIO.setup('P8_18', GPIO.OUT)
-
-
         #       GPIO.setup(self.pir1Pins['signal_pin'], GPIO.IN)
         self.event.set()
         controlTread = threading.Thread(name=' controlTread ', target=self.control)
@@ -136,6 +137,10 @@ class Module(Sensor):
             rw_proc.join()
             logger.info("Keyboard Interrupt, all threads have finished")
 
+    def statistic(self):
+        conn = lite.connect('sen_info.db')
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE PIR(Time REAL, Value INT)")
 
 if __name__ == '__main__':
     mod = Module(dr=100)
