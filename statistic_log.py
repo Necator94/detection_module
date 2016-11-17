@@ -1,15 +1,32 @@
+#   statistic_log.py
+#
+#   The class provides data collection functionality for multi threading usage. All data stored in <filename>.db file
+#   (by default - sen_info_0.db)
+#   A frequency of sensors' polling does not influence on the class performance.
+#
+#   Input arguments:
+#   args - array of names and queues for writing
+#   stop - event for stop of the class
+#   Optional: base_name = 'sen_info_0'
+#
+#   Important:
+#   incoming array should be formatted as multidimensional array even if array has
+
+#   Author: Ivan Matveev
+#   E-mail: i.matveev@emw.hs-anhalt.de
+#   Date: 17.11.2016
+
+
 import threading
 import Queue
 import sqlite3 as lite
 import os
 import logging
 
-
 logging.basicConfig(level=logging.INFO)  # Setting up logger
 logger = logging.getLogger("detection module")
 
 class statistic(threading.Thread):
-
     def __init__(self, args, stop, base_name='sen_info_0'):
         threading.Thread.__init__(self)
         self.names = args[0]
@@ -19,6 +36,10 @@ class statistic(threading.Thread):
         self.out_queues = [Queue.Queue() for i in range(len(self.in_queues))]
         self.internal_stop = threading.Event()
         self.internal_stop.set()
+
+    def check_on_args(self):
+        if not isinstance(self.names[0], str):
+            self.names, self.in_queues = self.in_queues, self.names
 
     def writer(self):
         logger.info(threading.currentThread().getName() + "started")
@@ -45,12 +66,17 @@ class statistic(threading.Thread):
         logger.info(threading.currentThread().getName() + "finished")
 
     def wraper(self, in_q):
-        temp = [[]for x in range(2)]
+        try:
+            sample = in_q.get(timeout=0.1)
+            temp = [[sample[x]] for x in range(len(sample))]
+        except Queue.Empty:
+            logger.debug("wraper in_q queue timeout")
+            return temp, False
         while len(temp[0]) < 11:
             try:
                 sample = in_q.get(timeout=0.1)
-                temp[0].append(sample[0])
-                temp[1].append(sample[1])
+                for x in range(len(temp)):
+                    temp[x].append(sample[x])
             except Queue.Empty:
                 logger.debug("wraper in_q queue timeout")
                 return temp, False
@@ -58,7 +84,6 @@ class statistic(threading.Thread):
 
     def buffering(self, in_q, out_q):
         logger.info(threading.currentThread().getName() + "started")
-        q_size = 0
         while True:
             packet, flag = self.wraper(in_q)
             if not flag:
@@ -82,8 +107,15 @@ class statistic(threading.Thread):
                 break
 
     def run(self):
-        logger.info("STATISTIC START")
+        logger.info(self.__class__.__name__ + " START")
+        self.check_on_args()
         self.check_on_file()
+
+        if len(self.names) != len(self.in_queues):
+            logger.error("incoming args array has different lengths of columns: len(arg[0]) = %s len(arg[0]) = %s" % (
+            len(self.names), len(self.in_queues)))
+            return 1
+
         logger.debug("input queues number - %s" % len(self.in_queues))
         buf_threads = []
         for i in range(len(self.in_queues)):
@@ -98,6 +130,4 @@ class statistic(threading.Thread):
         self.internal_stop.clear()
         logger.info("internal event is cleared")
         wr.join()
-        logger.info("STATISTIC FINISH")
-
-
+        logger.warning(self.__class__.__name__ + " END")
