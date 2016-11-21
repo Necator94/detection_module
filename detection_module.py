@@ -137,10 +137,6 @@ class Module(Sensor):
             rw_proc.join()
             logger.info("Keyboard Interrupt, all threads have finished")
 
-    def statistic(self):
-        conn = lite.connect('sen_info.db')
-        cur = conn.cursor()
-        cur.execute("CREATE TABLE PIR(Time REAL, Value INT)")
 
 if __name__ == '__main__':
     mod = Module(dr=100)

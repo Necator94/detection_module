@@ -8,48 +8,49 @@ b = Queue.Queue()
 c = Queue.Queue()
 d = Queue.Queue()
 
-in_1 = ["PIR", "RW", "Ultrasonic", "kek"]
+in_ar = [["PIR", a, "Time|Value"],
+        ["RW", b, "Time|Value"],
+        ["Ultrasonic", c, "Time|Value"],
+        ["Kek", d, "Time"]]
 
-in_2 = [a, b, c, d]
 
-in_3 = ["Time|Value", "Time|Value", "Time|Value", "Time|Value"]
-in_ar = [[]for i in range(3)]
-in_ar[0] = in_1
-in_ar[1] = in_2
-in_ar[2] = in_3
+
 
 
 event = threading.Event()
 event.set()
 
 
-stat = statistic(in_ar, event)
+stat = statistic(in_ar, event, commit_interval=40)
 
 stat.start()
 
 
 i = 0
-while i < 106:
-    sample = []
-    sample.append(i)
-    sample.append(time.time())
+try:
+    while True:
+        sample = []
+        sample.append(i)
+        sample.append(time.time())
 
-    sample1 = []
-    sample1.append(i)
-    sample1.append(1)
+        sample1 = []
+        sample1.append(i)
+        sample1.append(1)
 
-    sample2 = []
-    sample2.append(i)
-    sample2.append(2)
+        sample2 = []
+        sample2.append(i)
+        sample2.append(2)
 
-    sample3 = []
-    sample3.append(i)
-    sample3.append(3)
+        sample3 = []
+        sample3.append(i)
 
-    a.put(sample)
-    b.put(sample1)
-    c.put(sample2)
-    d.put(sample3)
-    i += 1
 
+        a.put(sample)
+        b.put(sample1)
+        c.put(sample2)
+        d.put(sample3)
+        time.sleep(0.01)
+        i += 1
+except KeyboardInterrupt:
+    event.clear()
 event.clear()

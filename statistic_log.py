@@ -10,7 +10,15 @@
 #   Optional: base_name = 'sen_info_0'
 #
 #   Important:
-#   incoming array should be formatted as multidimensional array even if array has
+#   incoming array should be formatted as multidimensional array with 3 columns: table name, queue with data, names
+#   of columns, split by "|" symbol.
+
+#   Example:
+#   in_ar = [["<sensor_1>", <queue_1>, "column_1|column_2"],
+#           ["<sensor_2>", <queue_2>, "column_1|column_2"]]
+
+#   Sample of the queue item has to contain such amount of elements as table's columns amount
+
 
 #   Author: Ivan Matveev
 #   E-mail: i.matveev@emw.hs-anhalt.de
@@ -22,43 +30,59 @@ import Queue
 import sqlite3 as lite
 import os
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO)  # Setting up logger
-logger = logging.getLogger("detection module")
+logger = logging.getLogger("statistic_log")
 
 class statistic(threading.Thread):
-    def __init__(self, args, stop, base_name='sen_info_0'):
+    def __init__(self, args, stop, base_name='sen_info_0', packet_size=500, commit_interval=30):
         threading.Thread.__init__(self)
-        self.names = args[0]
-        self.in_queues = args[1]
+        temp = zip(*args)
+        self.commit_interval = commit_interval
+        self.packet_size = packet_size
+        self.names = temp[0]
+        self.in_queues = temp[1]
+        self.col_names = temp[2]
         self.stop_event = stop
         self.base_name = base_name
         self.out_queues = [Queue.Queue() for i in range(len(self.in_queues))]
         self.internal_stop = threading.Event()
         self.internal_stop.set()
 
-    def check_on_args(self):
-        if not isinstance(self.names[0], str):
-            self.names, self.in_queues = self.in_queues, self.names
-
     def writer(self):
         logger.info(threading.currentThread().getName() + "started")
         conn = lite.connect(self.base_name)
         cur = conn.cursor()
+        temp = []
+        sym_ar = []
+        for i in range(len(self.col_names)):
+            temp.append(self.col_names[i].split("|"))
+            sym_ar.append(("?, " * len(temp[i]))[:-2])
         for i in range(len(self.out_queues)):
-            cur.execute("CREATE TABLE %s (Time INT PRIMARY KEY, Value REAL)" % (self.names[i]))
+            cur.execute("CREATE TABLE %s (%s REAL)" % (self.names[i], temp[i][0]))
             logger.debug(threading.currentThread().getName() + self.names[i] + "table created")
+            for x in range(len(temp[i])):
+                if x != 0:
+                    cur.execute("ALTER TABLE %s ADD COLUMN %s REAL" % (self.names[i], temp[i][x]))
+        st_time = time.time()
         while self.internal_stop.isSet():
-            for i in range(len(self.out_queues)):
-                try:
-                    packet = self.out_queues[i].get(timeout=0.4)
-                    for s in range(len(packet[0])):
-                        cur.execute("INSERT INTO %s VALUES(?, ?)" % (self.names[i]), (packet[0][s], packet[1][s]))
-                except Queue.Empty:
-                    logger.warning(threading.currentThread().getName() + self.names[i] + "queue timeout")
+            try:
+                for i in range(len(self.out_queues)):
+                    packet = self.out_queues[i].get(timeout=10)
+                    packet = zip(*packet)
+                    cur.executemany("INSERT INTO %s VALUES(%s)" % (self.names[i], sym_ar[i]), packet)
+            except Queue.Empty:
+                logger.warning(threading.currentThread().getName() + self.names[i] + "queue timeout")
             qs_counter = 0
             for k in range(len(self.out_queues)):
                 qs_counter += self.out_queues[k].qsize()
+
+            if (time.time() - st_time) > self.commit_interval:
+                st_time = time.time()
+                conn.commit()
+                logger.warning(threading.currentThread().getName() + "commit performed")
+
             if not self.internal_stop.isSet() and qs_counter == 0:
                 break
         conn.commit()
@@ -66,15 +90,16 @@ class statistic(threading.Thread):
         logger.info(threading.currentThread().getName() + "finished")
 
     def wraper(self, in_q):
+        temp = []
         try:
-            sample = in_q.get(timeout=0.1)
+            sample = in_q.get(timeout=1)
             temp = [[sample[x]] for x in range(len(sample))]
         except Queue.Empty:
             logger.debug("wraper in_q queue timeout")
             return temp, False
-        while len(temp[0]) < 11:
+        while len(temp[0]) < self.packet_size:
             try:
-                sample = in_q.get(timeout=0.1)
+                sample = in_q.get(timeout=1)
                 for x in range(len(temp)):
                     temp[x].append(sample[x])
             except Queue.Empty:
@@ -108,7 +133,6 @@ class statistic(threading.Thread):
 
     def run(self):
         logger.info(self.__class__.__name__ + " START")
-        self.check_on_args()
         self.check_on_file()
 
         if len(self.names) != len(self.in_queues):
