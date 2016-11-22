@@ -9,9 +9,7 @@ c = Queue.Queue()
 d = Queue.Queue()
 
 in_ar = [["PIR", a, "Time|Value"],
-        ["RW", b, "Time|Value"],
-        ["Ultrasonic", c, "Time|Value"],
-        ["Kek", d, "Time"]]
+        ["RW", b, "Time|Value"]]
 
 
 
@@ -37,18 +35,10 @@ try:
         sample1.append(i)
         sample1.append(1)
 
-        sample2 = []
-        sample2.append(i)
-        sample2.append(2)
-
-        sample3 = []
-        sample3.append(i)
-
 
         a.put(sample)
         b.put(sample1)
-        c.put(sample2)
-        d.put(sample3)
+
         time.sleep(0.01)
         i += 1
 except KeyboardInterrupt:

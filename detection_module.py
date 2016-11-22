@@ -1,47 +1,71 @@
 import Queue
 import logging
 import numpy as np
-import sqlite3 as lite
 import threading
 import time
 
-import Adafruit_BBIO.GPIO as GPIO  # The library for GPIO handling
+import Adafruit_BBIO.GPIO as GPIO       # The library for GPIO handling
+from statistic_log import Statistic
 
-logging.basicConfig(level=logging.INFO)  # Setting up logger
-logger = logging.getLogger("detection module")
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
 
-class Sensor:
-    def __init__(self, tm_pir=0.5, tm_rw=0, dr=20):
-        self.tm_pir = tm_pir
-        self.tm_rw = tm_rw
-        self.duration = dr
-        self.event = threading.Event()
-        self.event.set()
-        self.pir_gpio = {'signal_pin': 'P8_15', 'LED_pin': 'P8_13'}
-        self.rw_gpio = {'signal_pin': 'P8_12', 'LED_pin': 'P8_18'}
+formatter = logging.Formatter('%(relativeCreated)6d - %(name)s - %(threadName)s - %(levelname)s - %(message)s')
 
-        self.pir_queue = Queue.Queue()
-        self.rw_queue = Queue.Queue()
-        self.rw_queue_res = Queue.Queue()
-        self.start_time = time.time()
-        self.event = threading.Event()
+ch.setFormatter(formatter)
+logger.addHandler(ch)
+
+pir_gpio = {'signal_pin': 'P8_15', 'LED_pin': 'P8_13'}
+rw_gpio = {'signal_pin': 'P8_12', 'LED_pin': 'P8_18'}
 
 
-    def polling(self, queue, gpio, tm):  # Function for PIR sensor polling
-        logger.info(threading.currentThread().getName() + "has started")
-        while self.event.isSet():
-            sample = []
-            sample.append(time.time())
-            sample.append(GPIO.input(gpio['signal_pin']))
-            queue.put(sample)
-#            queue.put(str(GPIO.input(gpio['signal_pin'])) + threading.currentThread().getName())  # Check GPIO and put to the queue
-#            queue.put(str(time.time()) + threading.currentThread().getName())
-            time.sleep(tm)  # Set sleeping time
-        logger.info(threading.currentThread().getName() + "has finished")
+class Module:
+    def __init__(self, tm_pir=0.5, tm_rw=0.1, duration=20, pir=False, rw=False):
+        self.gen_time = time.time()
+
+        self.pir_flag = pir
+        if self.pir_flag:
+            self.pir_queue = Queue.Queue()
+            self.pir_out_queue = Queue.Queue()
+            self.tm_pir = tm_pir
+            self.pir_gpio = pir_gpio
+            GPIO.setup(self.pir_gpio['signal_pin'], GPIO.IN)
+            self.pir_thread = threading.Thread(name='Polling PIR', target=self.polling,
+                                               args=(self.pir_queue, self.pir_gpio, self.tm_pir))
+        self.rw_flag = rw
+        if self.rw_flag:
+            self.rw_queue = Queue.Queue()
+            self.rw_queue_res = Queue.Queue()
+            self.rw_gpio = rw_gpio
+            self.tm_rw = tm_rw
+            GPIO.setup(self.rw_gpio['signal_pin'], GPIO.IN)
+            self.rw_thread = threading.Thread(name='Polling RW', target=self.polling,
+                                              args=(self.rw_queue, self.rw_gpio, self.tm_rw))
+            self.rw_proc_thread = threading.Thread(name='Rw processing ', target=self.rw_processing)
+
+        self.duration = duration
+        self.stop_ev = threading.Event()
+        self.stop_ev.set()
+
+        if self.pir_flag or self.rw_flag:
+            self.in_ar = [["PIR", self.pir_out_queue, "Time|Value"]]
+            self.st_module = Statistic(self.in_ar, self.stop_ev, commit_interval=10)
+            GPIO.setup('P8_18', GPIO.OUT)
+            self.control_thread = threading.Thread(name='Control thread', target=self.control)
+
+    def polling(self, queue, gpio, tm):
+        logger.info("Started")
+        start_time = time.time()
+        while self.stop_ev.isSet():
+            queue.put([time.time() - start_time, GPIO.input(gpio['signal_pin'])])
+            time.sleep(tm)
+        logger.info("Finished")
 
     def rw_processing(self):
-        logger.info(threading.currentThread().getName() + "has started")
+        logger.info("Started")
         f_buffer_time = []
         f_buffer_data = []
         s_buffer = []
@@ -49,14 +73,13 @@ class Sensor:
         result_buffer_fr = []
         result_buffer_time = []
 
-        while self.event.isSet():
+        while self.stop_ev.isSet():
             try:
-                check = self.rw_queue.get(timeout=0.05)
+                check = self.rw_queue.get(timeout=3)
                 f_buffer_time.append(check[0])
                 f_buffer_data.append(check[1])
 
                 if len(f_buffer_data) == 300:
-
                     for i in range(len(f_buffer_data) - 1):
                         if f_buffer_data[i + 1] > f_buffer_data[i]:
                             s_buffer.append(f_buffer_time[i + 1])
@@ -73,22 +96,20 @@ class Sensor:
                     f_buffer_time = []
                     f_buffer_data = []
 
-            except Queue.Empty: logger.info(threading.currentThread().getName() + "RW queue timeout")
+            except Queue.Empty:
+                logger.info("RW queue timeout")
+        logger.info("Finished")
 
-
-
-        logger.info(threading.currentThread().getName() + "has finished")
-
-class Module(Sensor):
-    def control(self):  # Function for human detection
-        logger.info(threading.currentThread().getName() + "has started")
-        while self.event.isSet():
-
+    def control(self):
+        logger.info("Started")
+        while self.stop_ev.isSet():
             try:
-                status_pir = self.pir_queue.get(timeout=1)
-                logger.info(threading.currentThread().getName() + "PIR status = " + str(status_pir))
-            except Queue.Empty: logger.info(threading.currentThread().getName() + "PIR queue timeout")
-
+                status_pir = self.pir_queue.get(timeout=3)
+                self.pir_out_queue.put(status_pir)
+#                logger.info(threading.currentThread().getName() + "PIR status = " + str(status_pir))
+            except Queue.Empty:
+                logger.info("PIR queue timeout")
+        '''
             try:
                 status_rw = self.rw_queue_res.get(timeout=0.5)
                 logger.info(threading.currentThread().getName() + "RW mean_val = " + str(status_rw))
@@ -99,45 +120,44 @@ class Module(Sensor):
                 GPIO.output('P8_18', GPIO.HIGH)
             else:
                 GPIO.output('P8_18', GPIO.LOW)
-
-        logger.info(threading.currentThread().getName() + "has finished")
+        '''
+        logger.info("Finished")
 
     def run(self):
-        GPIO.setup(self.rw_gpio['signal_pin'], GPIO.IN)
-        GPIO.setup(self.pir_gpio['signal_pin'], GPIO.IN)
-        GPIO.setup('P8_18', GPIO.OUT)
-        #       GPIO.setup(self.pir1Pins['signal_pin'], GPIO.IN)
-        self.event.set()
-        controlTread = threading.Thread(name=' controlTread ', target=self.control)
-#        pirThread = threading.Thread(name=' Polling PIR ', target=self.polling, args=(self.pir_queue, self.pir_gpio, self.tm_pir))
-        rwThread = threading.Thread(name=' Polling RW ', target=self.polling, args=(self.rw_queue, self.rw_gpio, self.tm_rw))
-        rw_proc = threading.Thread(name=' Rw processing ', target=self.rw_processing)
+        if self.rw_flag or self.pir_flag:
+            self.st_module.start()
+            self.control_thread.start()
 
-        controlTread.start()
+        if self.rw_flag:
+            self.rw_thread.start()
+            self.rw_proc_thread.start()
 
-        rwThread.start()
-        rw_proc.start()
-#        pirThread.start()
-
-        self.starttime = time.time()
+        if self.pir_flag:
+            self.pir_thread.start()
 
         try:
-            while (time.time() - self.starttime) < self.duration and self.event.is_set(): pass
-            self.event.clear()
-#            pirThread.join()
-            rwThread.join()
-            controlTread.join()
-            rw_proc.join()
-            logger.info("Time is over, all threads have finished")
+            while (time.time() - self.gen_time) < self.duration and self.stop_ev.is_set():
+                time.sleep(1)
+            logger.info("Time is over")
         except KeyboardInterrupt:
-            self.event.clear()
-#            pirThread.join()
-            rwThread.join()
-            controlTread.join()
-            rw_proc.join()
-            logger.info("Keyboard Interrupt, all threads have finished")
+            logger.info("Keyboard Interrupt, threads are going to stop")
+
+        self.stop_ev.clear()
+        logger.info("Stop event set to %s" % (self.stop_ev.isSet()))
+        logger.info("Execution time %s", time.time() - self.gen_time)
+
+        if self.rw_flag:
+            self.pir_thread.join()
+        if self.rw_flag:
+            self.rw_thread.join()
+            self.rw_proc_thread.join()
+        if self.rw_flag or self.pir_flag:
+            self.control_thread.join()
+            self.st_module.join()
+        logger.info("All threads have finished")
 
 
 if __name__ == '__main__':
-    mod = Module(dr=100)
+    mod = Module(duration=100, pir=True, tm_pir=0.1)
+ #   s = Statistic()
     mod.run()
