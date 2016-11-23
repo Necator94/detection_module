@@ -46,7 +46,7 @@ logger.addHandler(str_h)
 
 
 class Statistic(threading.Thread):
-    def __init__(self, args, stop, base_name='sen_info_0', buf_size=10000, commit_interval=60):
+    def __init__(self, stop, args, base_name='sen_info_0', buf_size=10000, commit_interval=60):
         threading.Thread.__init__(self, name="Main thread")
         temp = zip(*args)
         self.names = temp[0]
@@ -163,6 +163,10 @@ class Statistic(threading.Thread):
             buf_threads.append(thr)
         wr = threading.Thread(name='Writer thread', target=self.writer)
         wr.start()
+
+        while self.stop_event.is_set():
+            time.sleep(1)
+        logger.info("Stop event received")
         for i in range(len(self.in_queues)):
             buf_threads[i].join()
         self.internal_stop.clear()
