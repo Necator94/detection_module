@@ -169,7 +169,6 @@ class Module(threading.Thread):
             control_thread.join()
         logger.info("Finished")
 
-
 if __name__ == '__main__':
 
     stop_ev = threading.Event()
