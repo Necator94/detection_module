@@ -1,4 +1,4 @@
-from statistic_log import statistic
+from statistic_lib import statistic
 import time
 import threading
 import Queue

@@ -29,21 +29,10 @@ import threading
 import Queue
 import sqlite3 as lite
 import os
-import logging
+import logging.config
 import time
 
-
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-str_h = logging.StreamHandler()
-str_h.setLevel(logging.INFO)
-
-formatter = logging.Formatter('%(relativeCreated)6d - %(name)s - %(threadName)s - %(levelname)s - %(message)s')
-
-str_h.setFormatter(formatter)
-logger.addHandler(str_h)
-
 
 class Statistic(threading.Thread):
     def __init__(self, stop, args, base_name='sen_info_0', buf_size=10000, commit_interval=60):
@@ -129,8 +118,7 @@ class Statistic(threading.Thread):
             out_q.put(packet)
             if not self.stop_event.isSet() and in_q.qsize() == 0:
                 break
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("Rest items in queue " + str(in_q.qsize()))
+        logger.debug("Rest items in queue " + str(in_q.qsize()))
         logger.info("Finished")
 
     def check_on_file(self):

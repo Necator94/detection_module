@@ -1,23 +1,15 @@
+#!/usr/bin/env python
+
 import Queue
-import logging
 import numpy as np
 import threading
 import time
+import logging.config
 
 import Adafruit_BBIO.GPIO as GPIO       # The library for GPIO handling
-from statistic_log import Statistic
+from statistic_lib import Statistic
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-
-formatter = logging.Formatter('%(relativeCreated)6d - %(name)s - %(threadName)s - %(levelname)s - %(message)s')
-
-ch.setFormatter(formatter)
-logger.addHandler(ch)
-
 
 class Module(threading.Thread):
     def __init__(self, st_event, pir=False, rw=False, dm=False):
@@ -110,15 +102,19 @@ class Module(threading.Thread):
     def control(self):
         logger.info("Started")
         while self.stop_ev.isSet():
-            try:
-                self.pir_sample = self.pir_control_q.get(timeout=3)
-            except Queue.Empty:
-                logger.info("PIR queue timeout")
-            try:
-                self.status_rw = self.rw_result_q.get(timeout=3)
-                logger.info("RW mean_val = " + str(self.status_rw))
-            except Queue.Empty:
-                logger.info("RW queue timeout")
+
+            if self.pir_flag:
+                try:
+                    self.pir_sample = self.pir_control_q.get(timeout=3)
+                except Queue.Empty:
+                    logger.info("PIR queue timeout")
+
+            if self.rw_flag:
+                try:
+                    self.status_rw = self.rw_result_q.get(timeout=3)
+                  #  logger.info("RW mean_val = " + str(self.status_rw))
+                except Queue.Empty:
+                    logger.info("RW queue timeout")
 
             # if self.status_rw > 0 and self.pir_sample > 0:
             #     GPIO.output('P8_18', GPIO.HIGH)
@@ -145,7 +141,7 @@ class Module(threading.Thread):
             rw_processing.start()
 
         if self.rw_flag or self.pir_flag:
-            st_module = Statistic(self.stop_ev, self.st_args, commit_interval=10)
+            st_module = Statistic(self.stop_ev, self.st_args)
             st_module.start()
             control_thread = threading.Thread(name='Control thread', target=self.control)
             control_thread.start()
@@ -168,24 +164,3 @@ class Module(threading.Thread):
             st_module.join()
             control_thread.join()
         logger.info("Finished")
-
-if __name__ == '__main__':
-
-    stop_ev = threading.Event()
-    stop_ev.set()
-
-    module = Module(stop_ev)
-
-    st_time = time.time()
-    module.start()
-
-    try:
-        while time.time() - st_time < 20:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Keyboard Interrupt, threads are going to stop")
-    stop_ev.clear()
-
-
-    module.join()
-
