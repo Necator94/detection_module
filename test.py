@@ -1,4 +1,4 @@
-from statistic_lib import statistic
+from statistic_lib import Statistic
 import time
 import threading
 import Queue
@@ -8,37 +8,20 @@ b = Queue.Queue()
 c = Queue.Queue()
 d = Queue.Queue()
 
-in_ar = [["PIR", a, "Time|Value"],
-        ["RW", b, "Time|Value"]]
 
-
-
-
+in_ar = {"PIR": {"col_name": ["Time", "Value"], "queue": a}}
 
 event = threading.Event()
 event.set()
 
-
-stat = statistic(in_ar, event, commit_interval=40)
+stat = Statistic( event, in_ar, commit_interval=40)
 
 stat.start()
-
 
 i = 0
 try:
     while True:
-        sample = []
-        sample.append(i)
-        sample.append(time.time())
-
-        sample1 = []
-        sample1.append(i)
-        sample1.append(1)
-
-
-        a.put(sample)
-        b.put(sample1)
-
+        a.put(time.time(), i)
         time.sleep(0.01)
         i += 1
 except KeyboardInterrupt:
