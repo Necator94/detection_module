@@ -13,49 +13,42 @@ logger = logging.getLogger(__name__)
 
 
 class Module(threading.Thread):
-    def __init__(self, st_event, pir=False, rw=False, control=False):
+    def __init__(self, st_event, pir=False, rw=False, control=False, full=False):
         threading.Thread.__init__(self, name="Main thread")
+        self.start_time = time.time()
+
         self.pir_flag = pir
         self.rw_flag = rw
-        self.st_flag = False
         self.control_flag = control
-        if self.control_flag:
+
+        if full:
             self.pir_flag = True
             self.rw_flag = True
+            self.control_flag = True
 
-        self.stop_ev = st_event
+        self.st_flag = False
+        self.st_args = {}
+        self.control_qs = {}
 
-        self.pir_polling_qs = 0
-        self.rw_polling_qs = 0
-        self.rw_processing_qs = 0
-        self.control_qs = 0
+        if self.control_flag:
+            self.control_stat = {}
 
         if self.pir_flag:
             self.pir_gpio = {'signal_pin': 'P8_15', 'LED_pin': 'P8_13'}
             self.pir_polling_qs = {"polling": Queue.Queue()}
+            self.control_qs.update({"PIR": self.pir_polling_qs["polling"]})
             self.pir_tm = 0.1
             self.pir_sample = 0
 
         if self.rw_flag:
             self.rw_gpio = {'signal_pin': 'P8_12', 'LED_pin': 'P8_18'}
-            self.rw_polling_qs += 1
-            self.rw_processing_qs += 1
-            self.rw_tm = 0.01
+            self.rw_polling_qs = {"polling": Queue.Queue()}
+            self.rw_processing_qs = {"processing": Queue.Queue()}
+            self.control_qs.update({"RW": self.rw_processing_qs["processing"]})
+            self.rw_tm = 0.001
             self.rw_sample = 0
 
-        self.st_args = []
-
-    def parser(self):
-       # self.pir_polling_qs = [Queue.Queue() for x in range(self.pir_polling_qs)]
-
-        self.rw_polling_qs = [Queue.Queue() for x in range(self.rw_polling_qs)]
-        self.rw_processing_qs = [Queue.Queue() for x in range(self.rw_processing_qs)]
-
-
-        if len(self.rw_polling_qs) == 2:
-            self.st_args.append(["RW", self.rw_polling_qs[1], "Time|Value"])
-        if len(self.rw_processing_qs) == 2:
-            self.st_args.append(["RW_proc", self.rw_processing_qs[1], "Time|Value"])
+        self.stop_ev = st_event
 
     def get_status_pir(self):
         return self.pir_sample
@@ -63,40 +56,45 @@ class Module(threading.Thread):
     def get_status_rw(self):
         return self.rw_sample
 
+    def set_stat_param(self, name, q, args, clms):
+        self.st_flag = True
+        q.update({"statistic": Queue.Queue()})
+        args.update({name: {"col_name": clms, "queue": q["statistic"]}})
+
     def set_statistic_lvl(self, full=False, pir_pol=False, rw_pol=False, rw_proc=False, control=False):
+        def except_log(name):
+            logger.warning("%s is not defined in the module, data collection is not possible" % name)
+
         if full:
             pir_pol = True
             rw_pol = True
             rw_proc = True
             control = True
-        if pir_pol and self.pir_flag:
-            self.st_flag = True
-            self.pir_polling_qs.update({"statistic": Queue.Queue()})
-            self.st_args.append(["PIR", self.pir_polling_qs["statistic"], "Time|Value"])
 
+        if pir_pol and self.pir_flag:
+            self.set_stat_param("PIR_polling", self.pir_polling_qs, self.st_args, ["Time", "Value"] )
         if pir_pol and not self.pir_flag:
-            logger.warning("pir sensor is not defined, polling data collection is not possible")
+            except_log("PIR sensor")
+
         if rw_pol and self.rw_flag:
-            self.st_flag = True
-            self.rw_polling_qs +=1
+            self.set_stat_param("RW_polling", self.rw_polling_qs, self.st_args, ["Time", "Value"] )
         if rw_pol and not self.rw_flag:
-            logger.warning("rw sensor is not defined, polling data collection is not possible")
+            except_log("RW sensor")
+
         if rw_proc and self.rw_flag:
-            self.st_flag = True
-            self.rw_processing_qs += 1
+            self.set_stat_param("RW_processing", self.rw_processing_qs, self.st_args, ["Time", "Value"] )
         if rw_proc and not self.rw_flag:
-            logger.warning("rw sensor is not defined, processing data collection is not possible")
-        if control and self.rw_flag and self.pir_flag:
-            self.st_flag = True
-            self.control_qs = Queue.Queue()
+            except_log("RW processing")
+
+        if control and self.control_flag:
+            self.set_stat_param("Control", self.control_stat, self.st_args, ["Time", "Value"])
         if control and (not self.rw_flag or not self.pir_flag):
-            logger.warning("rw or pir sensor are not defined, processing data collection is not possible")
+            except_log("Control")
 
     def polling(self, gpio, qs, tm):
         logger.info("Started")
-        start_time = time.time()
         while self.stop_ev.isSet():
-            sample = [time.time() - start_time, GPIO.input(gpio['signal_pin'])]
+            sample = [time.time() - self.start_time, GPIO.input(gpio['signal_pin'])]
             for key in qs:
                 qs[key].put(sample)
             time.sleep(tm)
@@ -109,10 +107,9 @@ class Module(threading.Thread):
         s_buffer = []
         result_buffer_fr = []
         result_buffer_time = []
-        mean_vol = 1
         while self.stop_ev.isSet():
             try:
-                check = self.rw_polling_qs[0].get(timeout=3)
+                check = self.rw_polling_qs["polling"].get(timeout=3)
 
                 f_buffer_time.append(check[0])
                 f_buffer_data.append(check[1])
@@ -126,14 +123,14 @@ class Module(threading.Thread):
                             freq = 1 / (s_buffer[k + 1] - s_buffer[k])
                             result_buffer_fr.append(freq)
                             result_buffer_time.append(s_buffer[k + 1])
-                        mean_vol = np.mean(result_buffer_fr)            # make a sample of mean value and do not put 2 times
-                        for x in range(len(self.rw_processing_qs)):
-                            self.rw_processing_qs[x].put([time.time(), mean_vol])
+                        mean_vol = np.mean(result_buffer_fr)
                         result_buffer_fr = []
                     else:
-                        for x in range(len(self.rw_processing_qs)):
-                            self.rw_processing_qs[x].put([time.time(), 0])
-                        logger.warning("mean " + str(mean_vol))
+                        mean_vol = 0
+
+                    for x in self.rw_processing_qs:
+                        self.rw_processing_qs[x].put([time.time() - self.start_time, mean_vol])
+
                     s_buffer = []
                     f_buffer_time = []
                     f_buffer_data = []
@@ -141,46 +138,66 @@ class Module(threading.Thread):
                 logger.info("RW queue timeout")
         logger.info("Finished")
 
-    def control(self):
+    def control(self, in_qs):
         logger.info("Started")
+        qs = dict.fromkeys(in_qs)
+        light = False
         while self.stop_ev.isSet():
-
-            if self.pir_flag:
+            for name in qs:
                 try:
-                    self.pir_sample = self.pir_polling_qs[0].get(timeout=3)
+                    qs[name] = (in_qs[name].get(timeout=3))
                 except Queue.Empty:
-                    logger.info("PIR queue timeout")
+                    logger.info("%s queue timeout" % name)
 
-            if self.rw_flag:
-                try:
-                    self.rw_sample = self.rw_processing_qs[0].get(timeout=3)
-                  #  logger.info("RW mean_val = " + str(self.status_rw))
-                except Queue.Empty:
-                    logger.info("RW queue timeout")
-
-            if self.control_flag:
-                if self.rw_sample > 0 and self.pir_sample > 0:
-                     GPIO.output('P8_18', GPIO.HIGH)
-                     if self.st_flag:
-                         self.dm_result_statistic_q.put([time.time(), 1])
+            if len(qs) == 2:
+                if qs["PIR"][1] > 0 and qs["RW"][1] > 0:
+                    light = True
                 else:
-                     GPIO.output('P8_18', GPIO.LOW)
+                    light = False
+
+            if len(qs) == 1:
+                for name in qs:
+                    if name == "PIR":
+                        if qs["PIR"][1] > 0:
+                            light = True
+                        else:
+                            light = False
+
+                    if name == "RW":
+                        if qs["RW"][1] > 0:
+                            light = True
+                        else:
+                            self.rw_sample = 0
+                            light = False
+
+            if self.st_flag:
+                if light: status = 1
+                else: status = 0
+                self.control_stat["statistic"].put([time.time() - self.start_time, status])
+
+            if light: GPIO.output('P8_18', GPIO.HIGH)
+            else: GPIO.output('P8_18', GPIO.LOW)
+
         logger.info("Finished")
 
     def set_fr(self, pir_fr=10, rw_fr=100):
-        self.pir_tm = 1/pir_fr
-        self.rw_tm = 1/rw_fr
+        self.pir_tm = 1 / pir_fr
+        self.rw_tm = 1 / rw_fr
 
     def run(self):
-        self.parser()
 
-        if len(self.pir_polling_qs) > 0:
+        if not self.pir_flag and not self.rw_flag:
+            self.stop_ev.clear()
+            logger.error("No sensors are specified. Exit")
+            return 1
+
+        if self.pir_flag:
             GPIO.setup(self.pir_gpio['signal_pin'], GPIO.IN)
             pir_polling = threading.Thread(name='Polling PIR', target=self.polling,
                                            args=(self.pir_gpio, self.pir_polling_qs, self.pir_tm))
             pir_polling.start()
 
-        if len(self.rw_polling_qs) > 0:
+        if self.rw_flag:
             GPIO.setup(self.rw_gpio['signal_pin'], GPIO.IN)
             rw_polling = threading.Thread(name='Polling RW', target=self.polling,
                                           args=(self.rw_gpio, self.rw_polling_qs, self.rw_tm))
@@ -188,22 +205,15 @@ class Module(threading.Thread):
             rw_polling.start()
             rw_processing.start()
 
-        if len(self.pir_polling_qs) > 0 or len(self.rw_polling_qs) > 0:
-            control_thread = threading.Thread(name='Control thread', target=self.control)
-            control_thread.start()
-
         if self.control_flag:
             GPIO.setup('P8_18', GPIO.OUT)
-            self.st_args.append(["DM", self.dm_result_statistic_q, "Time|Value"])
+            control_thread = threading.Thread(name='Control thread', target=self.control, args=(self.control_qs,))
+            control_thread.start()
 
         if self.st_flag:
             st_module = Statistic(self.stop_ev, self.st_args)
             st_module.start()
 
-        if not self.pir_flag and not self.rw_flag:
-            self.stop_ev.clear()
-            logger.error("No sensors are specified. Exit")
-            return 1
 
         while self.stop_ev.is_set():
             time.sleep(1)
@@ -214,7 +224,7 @@ class Module(threading.Thread):
         if self.rw_flag:
             rw_polling.join()
             rw_processing.join()
-        if self.rw_flag or self.pir_flag:
+        if self.control_flag:
             control_thread.join()
         if self.st_flag:
             st_module.join()

@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 stop_ev = threading.Event()
 stop_ev.set()
 
-module = Module(stop_ev, pir=True)
-module.set_statistic_lvl(pir_pol=True)
+module = Module(stop_ev, full=True)
+module.set_statistic_lvl(full=True)
 
 st_time = time.time()
 logger.info("Detection module started")

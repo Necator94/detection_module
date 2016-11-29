@@ -31,25 +31,17 @@ import sqlite3 as lite
 import os
 import logging.config
 import time
-import copy
+
 import logging
 
-#logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
-logger = logging.getLogger('spam_application')
-logger.setLevel(logging.DEBUG)
-ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-ch.setFormatter(formatter)
-
-logger.addHandler(ch)
 class Statistic(threading.Thread):
     def __init__(self, stop, in_parameters, base_name='sen_info_0', buf_size=10000, commit_interval=60):
         threading.Thread.__init__(self, name="Main thread")
 
-        self.in_parameters = copy.copy(in_parameters)
+        self.in_parameters = in_parameters
         self.buffered_qs = dict.fromkeys(self.in_parameters)
         for key in self.buffered_qs: self.buffered_qs[key] = Queue.Queue()
 
@@ -67,6 +59,9 @@ class Statistic(threading.Thread):
         conn = lite.connect(self.base_name)
         cur = conn.cursor()
 
+        records_num = dict.fromkeys(self.buffered_qs)
+        for key in records_num: records_num[key] = 0
+
         for name in self.in_parameters:
             cur.execute("CREATE TABLE %s (%s REAL)" % (name, self.in_parameters[name]["col_name"][0]))
             logger.debug("%s table created" % name)
@@ -76,16 +71,15 @@ class Statistic(threading.Thread):
                     cur.execute("ALTER TABLE %s ADD COLUMN %s REAL" % (name, self.in_parameters[name]["col_name"][x]))
 
         st_time = time.time()
-        while self.internal_stop.isSet():
-            for name in self.buffered_qs:
+        while True:
+
+            for name in self.in_parameters:
                 try:
                     packet = self.buffered_qs[name].get(timeout=3)
-                    print packet
-                    packet = zip(*packet)
+                    records_num[name] += len(packet)
                     cur.executemany("INSERT INTO %s VALUES(%s)"
-                                    % (name, ("?, " * len(self.buffered_qs[name]["col_name"]))[:-2]), packet)
-                except Queue.Empty:
-                    logger.debug("%s queue timeout" % self.buffered_qs[name])
+                                    % (name, ("?, " * len(self.in_parameters[name]["col_name"]))[:-2]), packet)
+                except Queue.Empty: logger.debug("%s queue timeout" % name)
 
             qs_counter = 0
             for name in self.buffered_qs:
@@ -98,6 +92,8 @@ class Statistic(threading.Thread):
 
             if not self.internal_stop.isSet() and qs_counter == 0: break
 
+        for name in records_num:
+            logger.info("Number of records to database: %s = %s" % (name, records_num[name]))
         conn.commit()
         conn.close()
         logger.info("Finished")
@@ -113,10 +109,13 @@ class Statistic(threading.Thread):
         logger.info("Started")
         while True:
             packet, flag = self.wrapper(in_q)
+
             if not flag:
                 logger.warning("Packet wrapper timeout")
-                out_q.put(packet)
+            out_q.put(packet)
+
             if not self.stop_event.isSet() and in_q.qsize() == 0: break
+
         logger.debug("Items in queue rest  " + str(in_q.qsize()))
         logger.info("Finished")
 
